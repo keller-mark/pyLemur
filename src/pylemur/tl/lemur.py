@@ -19,6 +19,7 @@ from pylemur.tl.alignment import (
     _reverse_linear_transformation,
 )
 
+import dask.array as da
 
 class LEMUR:
     """Fit the LEMUR model
@@ -134,8 +135,12 @@ class LEMUR:
         if self.linear_coefficient_estimator == "linear":
             if verbose:
                 print("Centering the data using linear regression.")
-            lin_coef = ridge_regression(Y, design_matrix.to_numpy())
-            Y = Y - design_matrix.to_numpy() @ lin_coef
+            
+            Y_dask = da.from_array(Y, chunks=(1000, 1000))
+            design_matrix_dask = da.from_array(design_matrix.to_numpy(), chunks=(1000, 1000))
+            lin_coef = ridge_regression(Y_dask, design_matrix_dask).compute()
+            Y_dask = Y_dask - design_matrix_dask @ lin_coef
+            Y = Y_dask.compute()
         else:  # linear_coefficient_estimator == "zero"
             lin_coef = np.zeros((design_matrix.shape[1], Y.shape[1]))
 

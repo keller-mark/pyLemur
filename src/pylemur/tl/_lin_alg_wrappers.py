@@ -84,7 +84,7 @@ def ridge_regression(Y, X, ridge_penalty=0, weights=None):
     X_ext = np.vstack([multiply_along_axis(X, weights_sqrt, 0), ridge_penalty_sq])
     Y_ext = np.vstack([multiply_along_axis(Y, weights_sqrt, 0), np.zeros((n_coef, n_feat))])
 
-    ridge = np.linalg.lstsq(X_ext, Y_ext, rcond=None)[0]
+    ridge = np.linalg.lstsq(X_ext, Y_ext)[0]
     return ridge
 
 
