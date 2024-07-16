@@ -1,11 +1,11 @@
 from collections.abc import Mapping
 
 import numpy as np
-from numpy.lib import NumpyVersion
 import pandas as pd
 
 # import patsy
 from formulaic import model_matrix
+from numpy.lib import NumpyVersion
 
 
 def handle_data(data, layer):
@@ -21,10 +21,13 @@ def handle_design_parameter(design, obs_data):
             # Throw error
             raise ValueError("design specified as a 1d array is not supported yet")
         elif design.ndim == 2:
-            design_matrix = design
+            design_matrix = pd.DataFrame(design)
             design_formula = None
         else:
             raise ValueError("design must be a 2d array")
+    elif isinstance(design, pd.DataFrame):
+        design_matrix = design
+        design_formula = None
     elif isinstance(design, list):
         return handle_design_parameter(" * ".join(design), obs_data)
     elif isinstance(design, str):
@@ -54,8 +57,14 @@ def handle_obs_data(adata, obs_data):
 def make_data_frame(data, preferred_index=None):
     if data is None:
         return None
-    if isinstance(data, pd.DataFrame):
+    if isinstance(data, pd.DataFrame) and preferred_index is None:
         return data
+    if isinstance(data, pd.DataFrame) and preferred_index is not None:
+        if preferred_index.equals(data.index) or preferred_index.equals(data.index.map(str)):
+            data.index = preferred_index
+            return data
+        else:
+            raise ValueError("The index of adata.obs and obsData do not match")
     elif isinstance(data, Mapping):
         return pd.DataFrame(data, index=preferred_index)
     else:
@@ -75,7 +84,7 @@ def convert_formula_to_design_matrix(formula, obs_data):
 
 def row_groups(matrix, return_reduced_matrix=False, return_group_ids=False):
     reduced_matrix, inv = np.unique(matrix, axis=0, return_inverse=True)
-    if NumpyVersion(np.__version__) >= '2.0.0rc':
+    if NumpyVersion(np.__version__) >= "2.0.0rc":
         inv = np.squeeze(inv)
     group_ids = np.unique(inv)
     if return_reduced_matrix and return_group_ids:

@@ -1,17 +1,18 @@
 import re
 import warnings
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import anndata as ad
 import formulaic
 import numpy as np
+import pandas as pd
 from sklearn.exceptions import NotFittedError
 
-from pylemur.tl._design_matrix_utils import *
+from pylemur.tl._design_matrix_utils import handle_data, handle_design_parameter, handle_obs_data, row_groups
 from pylemur.tl._grassmann import grassmann_map
 from pylemur.tl._grassmann_lm import grassmann_lm, project_data_on_diffemb
-from pylemur.tl._lin_alg_wrappers import *
+from pylemur.tl._lin_alg_wrappers import fit_pca, multiply_along_axis, ridge_regression
 from pylemur.tl.alignment import (
     _align_impl,
     _apply_linear_transformation,
@@ -22,7 +23,7 @@ from pylemur.tl.alignment import (
 import dask.array as da
 
 class LEMUR:
-    """Fit the LEMUR model
+    r"""Fit the LEMUR model
 
     A python implementation of the LEMUR algorithm. For more details please refer
     to Ahlmann-Eltze (2024).
@@ -30,7 +31,7 @@ class LEMUR:
     Parameters
     ----------
     data
-        The AnnData object containing the variance stabilized data and the
+        The AnnData object (or a different matrix container) with the variance stabilized data and the
         cell-wise annotations in `data.obs`.
     design
         A specification of the experimental design. This can be a string,
@@ -55,47 +56,50 @@ class LEMUR:
         Whether to make a copy of `data`.
 
     Attributes
-    ----------    
-    embedding : :class:`~numpy.ndarray` (:math:`C \\times P`)
-        Low-dimensional representation of each cell 
+    ----------
+    embedding : :class:`~numpy.ndarray` (:math:`C \times P`)
+        Low-dimensional representation of each cell
     adata : :class:`~anndata.AnnData`
         A reference to (potentially a copy of) the input data.
-    data_matrix : :class:`~numpy.ndarray` (:math:`C \\times G`)
+    data_matrix : :class:`~numpy.ndarray` (:math:`C \times G`)
         A reference to the data matrix from the `adata` object.
     n_embedding : int
         The number of latent dimensions
-    design_matrix : :class:`~formulaic.model_matrix.ModelMatrix` (:math:`C \\times K`)
+    design_matrix : `ModelMatrix` (:math:`C \times K`)
         The design matrix that is used for the fit.
     formula : str
         The design formula specification.
-    coefficients : :class:`~numpy.ndarray` (:math:`P \\times G \\times K`)
+    coefficients : :class:`~numpy.ndarray` (:math:`P \times G \times K`)
         The 3D array of coefficients for the Grassmann regression.
-    alignment_coefficients : :class:`~numpy.ndarray` (:math:`P \\times (P+1) \\times K`)
+    alignment_coefficients : :class:`~numpy.ndarray` (:math:`P \times (P+1) \times K`)
         The 3D array of coefficients for the affine alignment.
-    linear_coefficients : :class:`~numpy.ndarray` (:math:`K\\times G`)
+    linear_coefficients : :class:`~numpy.ndarray` (:math:`K\times G`)
         The 2D array of coefficients for the linear offset per condition.
     linear_coefficient_estimator : str
         The linear coefficient estimation specification.
-    base_point :  :class:`~numpy.ndarray` (:math:`(P \\times G`))
+    base_point :  :class:`~numpy.ndarray` (:math:`(P \times G`))
         The 2D array representing the reference subspace.
-    
+
     Examples
     --------
-    >>> model = pylemur.tl.LEMUR(adata, design = "~ label + batch_cov", n_embedding=15)
+    >>> model = pylemur.tl.LEMUR(adata, design="~ label + batch_cov", n_embedding=15)
     >>> model.fit()
     >>> model.align_with_harmony()
-    >>> pred_expr = model.predict(new_condition = model.cond(label="treated"))
+    >>> pred_expr = model.predict(new_condition=model.cond(label="treated"))
     >>> emb_proj = model_small.transform(adata)
     """
 
-    def __init__(self,
-                 adata: ad.AnnData,
-                 design: Union[str, list[str], np.ndarray] = "~ 1",
-                 obs_data: Union[pd.DataFrame, Mapping[str, Iterable[Any]], None] = None,
-                 n_embedding: int = 15,
-                 linear_coefficient_estimator: Literal["linear", "zero"] = "linear",
-                 layer: Union[str, None] = None,
-                 copy: bool = True):
+    def __init__(
+        self,
+        adata: ad.AnnData | Any,
+        design: str | list[str] | np.ndarray = "~ 1",
+        obs_data: pd.DataFrame | Mapping[str, Iterable[Any]] | None = None,
+        n_embedding: int = 15,
+        linear_coefficient_estimator: Literal["linear", "zero"] = "linear",
+        layer: str | None = None,
+        copy: bool = True,
+    ):
+        adata = _handle_data_arg(adata)
         if copy:
             adata = adata.copy()
         self.adata = adata
@@ -122,7 +126,7 @@ class LEMUR:
         ----------
         verbose
             Whether to print progress to the console.
-        
+
         Returns
         -------
         `self`
@@ -154,7 +158,7 @@ class LEMUR:
             print("Find shared embedding coordinates")
         embedding = project_data_on_diffemb(Y, design_matrix.to_numpy(), coefficients, base_point)
 
-        embedding, coefficients, base_point = order_axis_by_variance(embedding, coefficients, base_point)
+        embedding, coefficients, base_point = _order_axis_by_variance(embedding, coefficients, base_point)
 
         self.embedding = embedding
         self.alignment_coefficients = np.zeros((n_embedding, n_embedding + 1, design_matrix.shape[1]))
@@ -165,7 +169,7 @@ class LEMUR:
         return self
 
     def align_with_harmony(
-        self, ridge_penalty: Union[float, list[float], np.ndarray] = 0.01, max_iter: int = 10, verbose: bool = True
+        self, ridge_penalty: float | list[float] | np.ndarray = 0.01, max_iter: int = 10, verbose: bool = True
     ):
         """Fine-tune the embedding with a parametric version of Harmony.
 
@@ -187,6 +191,12 @@ class LEMUR:
             `model.embedding` attribute and an the updated alignment coefficients
             stored in `model.alignment_coefficients`.
         """
+        if self.embedding is None:
+            raise NotFittedError(
+                "self.embedding is None. Make sure to call 'model.fit()' "
+                + "before calling 'model.align_with_harmony()'."
+            )
+
         embedding = self.embedding.copy()
         design_matrix = self.design_matrix
         # Init harmony
@@ -218,11 +228,10 @@ class LEMUR:
         self.embedding = _apply_linear_transformation(embedding, al_coef, design_matrix)
         return self
 
-
     def align_with_grouping(
         self,
-        grouping: Union[list, np.ndarray, pd.Series],
-        ridge_penalty: Union[float, list[float], np.ndarray] = 0.01,
+        grouping: list | np.ndarray | pd.Series,
+        ridge_penalty: float | list[float] | np.ndarray = 0.01,
         preserve_position_of_NAs: bool = False,
         verbose: bool = True,
     ):
@@ -248,6 +257,11 @@ class LEMUR:
             `model.embedding` attribute and an the updated alignment coefficients
             stored in `model.alignment_coefficients`.
         """
+        if self.embedding is None:
+            raise NotFittedError(
+                "self.embedding is None. Make sure to call 'model.fit()' "
+                + "before calling 'model.align_with_grouping()'."
+            )
         embedding = self.embedding.copy()
         design_matrix = self.design_matrix
         if isinstance(grouping, list):
@@ -258,15 +272,24 @@ class LEMUR:
             grouping[grouping == -1] = np.nan
 
         al_coef = _align_impl(
-            embedding, grouping, design_matrix, ridge_penalty=ridge_penalty, calculate_new_embedding=False, verbose=verbose
+            embedding,
+            grouping,
+            design_matrix,
+            ridge_penalty=ridge_penalty,
+            calculate_new_embedding=False,
+            verbose=verbose,
         )
         self.alignment_coefficients = al_coef
-        self.embedding =  _apply_linear_transformation(embedding, al_coef, design_matrix)
+        self.embedding = _apply_linear_transformation(embedding, al_coef, design_matrix)
         return self
 
-    def transform(self, adata: ad.AnnData, layer: Union[str, None] = None,
-                  obs_data: Union[pd.DataFrame, Mapping[str, Iterable[Any]], None] = None,
-                  return_type: Literal["embedding", "LEMUR"] = "embedding"):
+    def transform(
+        self,
+        adata: ad.AnnData,
+        layer: str | None = None,
+        obs_data: pd.DataFrame | Mapping[str, Iterable[Any]] | None = None,
+        return_type: Literal["embedding", "LEMUR"] = "embedding",
+    ):
         """Transform data using the fitted LEMUR model
 
         Parameters
@@ -274,7 +297,7 @@ class LEMUR:
         adata
             The AnnData object to transform.
         obs_data
-            Optional set of annotations for each cell (same as `obs_data` in the 
+            Optional set of annotations for each cell (same as `obs_data` in the
             constructor).
         return_type
             Flag that decides if the function returns a full `LEMUR` object or
@@ -283,9 +306,9 @@ class LEMUR:
         Returns
         -------
         :class:`~pylemur.tl.LEMUR`
-            (if `return_type = "LEMUR"`) A new `LEMUR` object object with the embedding 
+            (if `return_type = "LEMUR"`) A new `LEMUR` object object with the embedding
             calculated for the input `adata`.
-        
+
         :class:`~numpy.ndarray`
             (if `return_type = "embedding"`) A 2D numpy array of the embedding matrix
             calculated for the input `adata` (with cells in the rows and latent dimensions
@@ -296,8 +319,9 @@ class LEMUR:
         design_matrix, _ = handle_design_parameter(self.formula, adata.obs)
         dm = design_matrix.to_numpy()
         Y_clean = Y - dm @ self.linear_coefficients
-        embedding = project_data_on_diffemb(Y_clean, design_matrix = dm, coefficients = self.coefficients,
-                                            base_point = self.base_point)
+        embedding = project_data_on_diffemb(
+            Y_clean, design_matrix=dm, coefficients=self.coefficients, base_point=self.base_point
+        )
         embedding = _apply_linear_transformation(embedding, self.alignment_coefficients, dm)
         if return_type == "embedding":
             return embedding
@@ -308,13 +332,13 @@ class LEMUR:
             fit.embedding = embedding
             return fit
 
-
-    def predict(self,
-        embedding: Union[np.ndarray, None] = None,
-        new_design: Union[str, list[str], np.ndarray, None] = None,
-        new_condition: Union[np.ndarray, pd.DataFrame, None] = None,
-        obs_data: Union[pd.DataFrame, Mapping[str, Iterable[Any]], None] = None,
-        new_adata_layer: Union[None, str] = None
+    def predict(
+        self,
+        embedding: np.ndarray | None = None,
+        new_design: str | list[str] | np.ndarray | None = None,
+        new_condition: np.ndarray | pd.DataFrame | None = None,
+        obs_data: pd.DataFrame | Mapping[str, Iterable[Any]] | None = None,
+        new_adata_layer: None | str = None,
     ):
         """Predict the expression of cells in a specific condition
 
@@ -350,7 +374,7 @@ class LEMUR:
 
         if new_condition is not None:
             if new_design is not None:
-                warnings.warn("new_design is ignored if new_condition is provided.")
+                warnings.warn("new_design is ignored if new_condition is provided.", stacklevel=1)
 
             if isinstance(new_condition, pd.DataFrame):
                 new_design = new_condition.to_numpy()
@@ -380,13 +404,14 @@ class LEMUR:
             subspace = grassmann_map(np.dot(coef, covars).T, self.base_point.T)
             alignment = _reverse_linear_transformation(al_coefs, covars)
             offset = np.dot(al_coefs[:, 0, :], covars)
-            approx[des_row_groups == id, :] += ((embedding[des_row_groups == id, :] - offset) @ alignment.T) @ subspace.T
+            approx[des_row_groups == id, :] += (
+                (embedding[des_row_groups == id, :] - offset) @ alignment.T
+            ) @ subspace.T
         if new_adata_layer is not None:
             self.adata.layers[new_adata_layer] = approx
             return self
         else:
             return approx
-
 
     def cond(self, **kwargs):
         """Define a condition for the `predict` function.
@@ -402,13 +427,13 @@ class LEMUR:
 
         Returns
         -------
-        :class:`~formulaic.model_matrix.ModelMatrix`
-            A ModelMatrix instance with one row with the same columns as the design matrix. 
-            
+        `ModelMatrix`
+            A ModelMatrix instance with one row with the same columns as the design matrix.
+
 
         Notes
         -----
-        Subtracting two `cond(...)` calls, produces a contrast vector; these are 
+        Subtracting two `cond(...)` calls, produces a contrast vector; these are
         commonly used in `R` to test for differences in a regression model.
         This pattern is inspired by the `R` package `glmGamPoi <https://bioconductor.org/packages/glmGamPoi/>`__.
         """
@@ -459,8 +484,14 @@ class LEMUR:
             return f"LEMUR model with {self.n_embedding} dimensions"
 
 
+def _handle_data_arg(data):
+    if isinstance(data, ad.AnnData):
+        return data
+    else:
+        return ad.AnnData(data)
 
-def order_axis_by_variance(embedding, coefficients, base_point):
+
+def _order_axis_by_variance(embedding, coefficients, base_point):
     U, d, Vt = np.linalg.svd(embedding, full_matrices=False)
     base_point = Vt @ base_point
     coefficients = np.einsum("pq,qij->pij", Vt, coefficients)
