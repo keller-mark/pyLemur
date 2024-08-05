@@ -144,10 +144,10 @@ class LEMUR:
                 print("Centering the data using linear regression.")
             
             design_matrix_dask = da.from_array(design_matrix.to_numpy(), chunks=(1000, 1000))
-            lin_coef = ridge_regression(Y_dask, design_matrix_dask).compute()
-            Y_dask = Y_dask - design_matrix_dask @ lin_coef
+            lin_coef_dask = ridge_regression(Y_dask, design_matrix_dask)
+            Y_dask = Y_dask - design_matrix_dask @ lin_coef_dask
         else:  # linear_coefficient_estimator == "zero"
-            lin_coef = da.zeros((design_matrix.shape[1], Y.shape[1]))
+            lin_coef_dask = da.zeros((design_matrix.shape[1], Y_dask.shape[1]))
 
         if verbose:
             print("Find base point")
@@ -157,7 +157,7 @@ class LEMUR:
         coefficients = grassmann_lm(Y_dask, design_matrix_dask, base_point)
         if verbose:
             print("Find shared embedding coordinates")
-        embedding = project_data_on_diffemb(Y_dask, design_matrix_dask, coefficients, base_point)
+        embedding = project_data_on_diffemb(Y_dask, design_matrix_dask, coefficients, base_point, use_dask=False)
 
         embedding, coefficients, base_point = _order_axis_by_variance(embedding, coefficients, base_point)
 
@@ -165,7 +165,7 @@ class LEMUR:
         self.alignment_coefficients = da.zeros((n_embedding, n_embedding + 1, design_matrix.shape[1]))
         self.coefficients = coefficients
         self.base_point = base_point
-        self.linear_coefficients = lin_coef
+        self.linear_coefficients = lin_coef_dask.compute()
 
         return self
 
@@ -494,13 +494,15 @@ def _handle_data_arg(data):
 
 def _order_axis_by_variance(embedding, coefficients, base_point):
     full_matrices = False
-    U, d, Vt = da.linalg.svd(embedding)
+    U, d, Vt = np.linalg.svd(embedding, full_matrices=full_matrices)
+    """
     if not full_matrices:
         m, n = embedding.shape
         U = U[:, :n]
         Vt = Vt[:m, :]
+    """
 
     base_point = Vt @ base_point
-    coefficients = da.einsum("pq,qij->pij", Vt, coefficients)
-    embedding = U @ da.diag(d)
+    coefficients = np.einsum("pq,qij->pij", Vt, coefficients)
+    embedding = U @ np.diag(d)
     return embedding, coefficients, base_point

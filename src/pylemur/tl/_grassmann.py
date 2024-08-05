@@ -2,21 +2,34 @@ import numpy as np
 import dask.array as da
 
 
-def grassmann_map(x, base_point):
-    if base_point.shape[0] == 0 or base_point.shape[1] == 0:
-        return base_point
-    elif da.isnan(x).any():
-        # Return an object with the same shape as x filled with nan
-        return da.full(x.shape, da.nan)
-    else:
-        full_matrices = False # numpy param
-        u, s, vt = da.linalg.svd(x)
-        if not full_matrices:
-            m, n = x.shape
-            u = u[:, :n]
-            vt = vt[:m, :]
+def grassmann_map(x, base_point, use_dask=True):
+    if use_dask:
+        if base_point.shape[0] == 0 or base_point.shape[1] == 0:
+            return base_point
+        elif da.isnan(x).any():
+            # Return an object with the same shape as x filled with nan
+            return da.full(x.shape, da.nan)
+        else:
+            full_matrices = False
+            u, s, vt = da.linalg.svd(x)
+            if not full_matrices:
+                m, n = x.shape
+                u = u[:, :n]
+                vt = vt[:m, :]
 
-        return (base_point @ vt.T) @ da.diag(da.cos(s)) @ vt + u @ da.diag(da.sin(s)) @ vt
+            return (base_point @ vt.T) @ da.diag(da.cos(s)) @ vt + u @ da.diag(da.sin(s)) @ vt
+    else:
+        if base_point.shape[0] == 0 or base_point.shape[1] == 0:
+            return base_point
+        elif np.isnan(x).any():
+            # Return an object with the same shape as x filled with nan
+            return np.full(x.shape, np.nan)
+        else:
+            full_matrices = False
+            u, s, vt = np.linalg.svd(x, full_matrices=full_matrices)
+
+            return (base_point @ vt.T) @ np.diag(np.cos(s)) @ vt + u @ np.diag(np.sin(s)) @ vt
+        
 
 
 def grassmann_log(p, q):
@@ -61,7 +74,7 @@ def grassmann_angle_from_tangent(x, normalized=True):
     compute_uv = False # numpy param
     _u, thetas, _v = da.linalg.svd(x) / np.pi * 180
     if normalized:
-        return da.minimum(thetas, 180 - thetas).max()
+        return np.minimum(thetas, 180 - thetas).max()
     else:
         return thetas[0]
 

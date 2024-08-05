@@ -91,16 +91,27 @@ def project_diffemb_into_data_space(embedding, design_matrix, coefficients, base
     return res
 
 
-def project_data_on_diffemb(Y, design_matrix, coefficients, base_point):
+def project_data_on_diffemb(Y, design_matrix, coefficients, base_point, use_dask=True):
+    if not use_dask:
+        if isinstance(Y, da.Array):
+            Y = Y.compute()
+        
+        if isinstance(coefficients, da.Array):
+            coefficients = coefficients.compute()
+        
+        if isinstance(base_point, da.Array):
+            base_point = base_point.compute()
+
     n_emb = base_point.shape[0]
     n_obs = Y.shape[0]
-    res = da.zeros((n_obs, n_emb))
+    res = np.zeros((n_obs, n_emb))
     des_row_groups, reduced_design_matrix, des_row_group_ids = row_groups(
-        design_matrix, return_reduced_matrix=True, return_group_ids=True
+        design_matrix, return_reduced_matrix=True, return_group_ids=True,
+        use_dask=False
     )
     for id in des_row_group_ids:
         Y_subset = Y[des_row_groups == id, :]
         covar = reduced_design_matrix[id, :]
-        subspace = grassmann_map(da.dot(coefficients, covar).T, base_point.T)
+        subspace = grassmann_map(np.dot(coefficients, covar).T, base_point.T, use_dask=use_dask)
         res[des_row_groups == id, :] = Y_subset @ subspace
     return res
