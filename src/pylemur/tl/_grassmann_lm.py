@@ -5,6 +5,8 @@ from pylemur.tl._design_matrix_utils import row_groups
 from pylemur.tl._grassmann import grassmann_log, grassmann_map
 from pylemur.tl._lin_alg_wrappers import fit_pca, ridge_regression
 
+from pylemur.tl._utils import ensure_numpy, ensure_dense, ensure_dask
+
 
 def grassmann_geodesic_regression(coord_systems, design, base_point, weights=None):
     """
@@ -93,14 +95,9 @@ def project_diffemb_into_data_space(embedding, design_matrix, coefficients, base
 
 def project_data_on_diffemb(Y, design_matrix, coefficients, base_point, use_dask=True):
     if not use_dask:
-        if isinstance(Y, da.Array):
-            Y = Y.compute()
-        
-        if isinstance(coefficients, da.Array):
-            coefficients = coefficients.compute()
-        
-        if isinstance(base_point, da.Array):
-            base_point = base_point.compute()
+        Y = ensure_numpy(Y)
+        coefficients = ensure_numpy(coefficients)
+        base_point = ensure_numpy(base_point)
 
     n_emb = base_point.shape[0]
     n_obs = Y.shape[0]

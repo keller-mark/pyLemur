@@ -8,6 +8,7 @@ import dask.array as da
 from formulaic import model_matrix
 from numpy.lib import NumpyVersion
 
+from pylemur.tl._utils import ensure_numpy, ensure_dask
 
 def handle_data(data, layer):
     Y = data.X if layer is None else data.layers[layer]
@@ -84,17 +85,17 @@ def convert_formula_to_design_matrix(formula, obs_data):
 
 
 def row_groups(matrix, return_reduced_matrix=False, return_group_ids=False, use_dask=True):
-    if isinstance(matrix, da.Array):
-        matrix = matrix.compute()
+    matrix = ensure_numpy(matrix)
+
     reduced_matrix, inv = np.unique(matrix, axis=0, return_inverse=True)
     if NumpyVersion(np.__version__) >= "2.0.0rc":
         inv = np.squeeze(inv)
     group_ids = np.unique(inv)
 
     if use_dask:
-        inv = da.from_array(inv)
-        reduced_matrix = da.from_array(reduced_matrix)
-        group_ids = da.from_array(group_ids)
+        inv = ensure_dask(inv)
+        reduced_matrix = ensure_dask(reduced_matrix)
+        group_ids = ensure_dask(group_ids)
 
     if return_reduced_matrix and return_group_ids:
         return inv, reduced_matrix, group_ids
