@@ -2,6 +2,7 @@ from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
+import dask.array as da
 
 # import patsy
 from formulaic import model_matrix
@@ -83,7 +84,7 @@ def convert_formula_to_design_matrix(formula, obs_data):
 
 
 def row_groups(matrix, return_reduced_matrix=False, return_group_ids=False):
-    reduced_matrix, inv = np.unique(matrix, axis=0, return_inverse=True)
+    reduced_matrix, inv = da.unique(matrix, axis=0, return_inverse=True)
     if NumpyVersion(np.__version__) >= "2.0.0rc":
         inv = np.squeeze(inv)
     group_ids = np.unique(inv)
