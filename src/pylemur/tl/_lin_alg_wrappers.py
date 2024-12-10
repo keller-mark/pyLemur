@@ -101,17 +101,27 @@ def ridge_regression(Y, X, ridge_penalty=0, weights=None):
 
 def multiply_along_axis(A, B, axis):
     # Copied from https://stackoverflow.com/a/71750176/604854
-    A = A.compute()
-    B = B.compute()
+    try:
+        A = A.compute()
+    except AttributeError:
+        # Was not a dask array
+        pass
+    try:
+        B = B.compute()
+    except AttributeError:
+        # Was not a dask array
+        pass
     if issparse(A):
         A = A.todense()
     if issparse(B):
         B = B.todense()
-    result = mult_along_axis(A, B, axis)
+    try:
+        result = mult_along_axis(A, B, axis)
+    except ValueError:
+        result = mult_along_axis_alt(A, B, axis)
     return da.from_array(result)
 
 def mult_along_axis(A, B, axis):
-
     # ensure we're working with Numpy arrays
     A = np.array(A)
     B = np.array(B)
@@ -120,6 +130,7 @@ def mult_along_axis(A, B, axis):
     if axis >= A.ndim:
         raise ValueError(f"AxisError({axis}, {A.ndim}")
     if A.shape[axis] != B.size:
+        print(A.shape, axis, B.size)
         raise ValueError(
             "Length of 'A' along the given axis must be the same as B.size"
             )
@@ -138,3 +149,7 @@ def mult_along_axis(A, B, axis):
     B_brc = np.swapaxes(B_brc, A.ndim-1, axis)
 
     return A * B_brc
+
+def mult_along_axis_alt(A, B, axis):
+    # Copied from https://stackoverflow.com/a/71750176/604854
+    return np.swapaxes(np.swapaxes(A, axis, -1) * B, -1, axis)
