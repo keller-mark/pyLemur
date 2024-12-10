@@ -387,6 +387,9 @@ class LEMUR:
 
             if isinstance(new_condition, pd.DataFrame):
                 new_design = new_condition.to_numpy()
+            elif isinstance(new_condition, pd.Series):
+                # model.cond() returns a Series now with formulaic_contrasts
+                new_design = np.expand_dims(new_condition.to_numpy(), axis=0)
             elif isinstance(new_condition, np.ndarray):
                 new_design = new_condition
             else:
