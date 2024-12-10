@@ -130,10 +130,9 @@ def mult_along_axis(A, B, axis):
     if axis >= A.ndim:
         raise ValueError(f"AxisError({axis}, {A.ndim}")
     if A.shape[axis] != B.size:
-        print(A.shape, axis, B.size)
         raise ValueError(
             "Length of 'A' along the given axis must be the same as B.size"
-            )
+        )
 
     # np.broadcast_to puts the new axis as the last axis, so 
     # we swap the given axis with the last one, to determine the
