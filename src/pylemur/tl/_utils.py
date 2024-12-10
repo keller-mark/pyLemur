@@ -4,8 +4,8 @@ from scipy.sparse import issparse
 
 def ensure_numpy(x):
     if isinstance(x, da.Array):
-        return x.compute()
-    return x
+        return np.array(x.compute())
+    return np.array(x)
 
 def ensure_dask(x):
     if not isinstance(x, da.Array):

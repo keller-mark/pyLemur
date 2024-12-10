@@ -395,21 +395,25 @@ class LEMUR:
             new_design = handle_design_parameter(new_design, handle_obs_data(self.adata, obs_data))[0].to_numpy()
 
         # Make prediciton
-        approx = ensure_numpy(new_design @ self.linear_coefficients)
+        approx = ensure_dask(new_design @ self.linear_coefficients)
 
         coef = self.coefficients
         al_coefs = self.alignment_coefficients
         des_row_groups, reduced_design_matrix, des_row_group_ids = row_groups(
             new_design, return_reduced_matrix=True, return_group_ids=True,
         )
+        des_row_groups = ensure_numpy(des_row_groups)
+        des_row_group_ids = ensure_numpy(des_row_group_ids)
         for id in des_row_group_ids:
             covars = reduced_design_matrix[id, :]
-            subspace = grassmann_map(np.dot(coef, covars).T, self.base_point.T)
+            subspace = grassmann_map(da.dot(coef, covars).T, self.base_point.T)
             alignment = _reverse_linear_transformation(al_coefs, covars)
-            offset = np.dot(al_coefs[:, 0, :], covars)
-            approx[des_row_groups == id, :] += ensure_numpy((
+            offset = da.dot(al_coefs[:, 0, :], covars)
+            approx[des_row_groups == id, :] += ensure_dask((
                 (embedding[des_row_groups == id, :] - offset) @ alignment.T
             ) @ subspace.T)
+        
+        approx = ensure_numpy(approx)
         if new_adata_layer is not None:
             self.adata.layers[new_adata_layer] = approx
             return self
