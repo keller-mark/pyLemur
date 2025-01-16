@@ -388,7 +388,6 @@ class LEMUR:
             if isinstance(new_condition, pd.DataFrame):
                 new_design = new_condition.to_numpy()
             elif isinstance(new_condition, pd.Series):
-                # model.cond() returns a Series now with formulaic_contrasts
                 new_design = np.expand_dims(new_condition.to_numpy(), axis=0)
             elif isinstance(new_condition, np.ndarray):
                 new_design = new_condition
@@ -441,8 +440,8 @@ class LEMUR:
 
         Returns
         -------
-        `ModelMatrix`
-            A ModelMatrix instance with one row with the same columns as the design matrix.
+        `pd.Series`
+            A contrast vector that aligns to the columns of the design matrix.
 
 
         Notes
@@ -455,6 +454,35 @@ class LEMUR:
             return self.contrast_builder.cond(**kwargs)
         else:
             raise ValueError("The design was not specified as a formula. Cannot automatically construct contrast.")
+
+    def copy(self, copy_adata = True):
+        cp = copy.deepcopy(self)
+        if copy_adata:
+            cp.adata = self.adata.copy()
+        return cp
+
+    def __deepcopy__(self, memo):
+        cp = LEMUR(self.adata, copy=False)
+        cp.contrast_builder = self.contrast_builder
+        cp.design_matrix = self.design_matrix
+        cp.formula = self.formula
+        cp.data_matrix = self.data_matrix
+        cp.linear_coefficient_estimator = self.linear_coefficient_estimator
+        cp.n_embedding = self.n_embedding
+        cp.embedding = self.embedding
+        cp.coefficients = self.coefficients
+        cp.linear_coefficients = self.linear_coefficients
+        cp.base_point = self.base_point
+        cp.alignment_coefficients = self.alignment_coefficients
+        return cp
+
+
+    def __eq__(self, other):
+        """Equality testing"""
+        raise NotImplementedError(
+            "Equality comparisons are not supported for AnnData objects, "
+            "instead compare the desired attributes."
+        )
 
     def __str__(self):
         if self.embedding is None:
