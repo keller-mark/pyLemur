@@ -2,6 +2,7 @@ from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
+import zarr
 
 # import patsy
 from formulaic import model_matrix
@@ -10,7 +11,7 @@ from numpy.lib import NumpyVersion
 
 def handle_data(data, layer):
     Y = data.X if layer is None else data.layers[layer]
-    if not isinstance(Y, np.ndarray):
+    if not isinstance(Y, np.ndarray) and not isinstance(Y, zarr.Array):
         Y = Y.toarray()
     return Y
 
