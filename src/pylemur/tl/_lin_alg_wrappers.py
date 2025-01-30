@@ -100,6 +100,10 @@ def ridge_regression(Y, X, ridge_penalty=0, weights=None):
 
 
 def multiply_along_axis(A, B, axis):
+
+    return mult_along_axis_dask(A, B, axis)
+
+    """
     # Copied from https://stackoverflow.com/a/71750176/604854
     try:
         print(A.shape)
@@ -122,6 +126,7 @@ def multiply_along_axis(A, B, axis):
     except ValueError:
         result = mult_along_axis_alt(A, B, axis)
     return da.from_array(result)
+    """
 
 def mult_along_axis(A, B, axis):
     # ensure we're working with Numpy arrays
@@ -154,3 +159,6 @@ def mult_along_axis(A, B, axis):
 def mult_along_axis_alt(A, B, axis):
     # Copied from https://stackoverflow.com/a/71750176/604854
     return np.swapaxes(np.swapaxes(A, axis, -1) * B, -1, axis)
+
+def mult_along_axis_dask(A, B, axis):
+    return da.moveaxis(da.moveaxis(A, axis, -1) * B, -1, axis)
