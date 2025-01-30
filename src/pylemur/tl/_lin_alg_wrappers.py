@@ -102,11 +102,13 @@ def ridge_regression(Y, X, ridge_penalty=0, weights=None):
 def multiply_along_axis(A, B, axis):
     # Copied from https://stackoverflow.com/a/71750176/604854
     try:
+        print(A.shape)
         A = A.compute()
     except AttributeError:
         # Was not a dask array
         pass
     try:
+        print(B.shape)
         B = B.compute()
     except AttributeError:
         # Was not a dask array
