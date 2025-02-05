@@ -1,7 +1,6 @@
 import warnings
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
-import copy
+from typing import Any, Literal, Callable
 
 import anndata as ad
 import formulaic_contrasts
@@ -20,6 +19,9 @@ from pylemur.tl.alignment import (
     _reverse_linear_transformation,
 )
 
+from pylemur.tl._utils import ensure_numpy, ensure_dask
+
+import dask.array as da
 
 class LEMUR:
     r"""Fit the LEMUR model
@@ -91,12 +93,15 @@ class LEMUR:
     def __init__(
         self,
         adata: ad.AnnData | Any,
+        get_input_arr: Callable[[], da.Array],
+
         design: str | list[str] | np.ndarray = "~ 1",
         obs_data: pd.DataFrame | Mapping[str, Iterable[Any]] | None = None,
         n_embedding: int = 15,
         linear_coefficient_estimator: Literal["linear", "zero"] = "linear",
         layer: str | None = None,
         copy: bool = True,
+        
     ):
         adata = _handle_data_arg(adata)
         if copy:
@@ -116,7 +121,7 @@ class LEMUR:
         self.formula = formula
         if design_matrix.shape[0] != adata.shape[0]:
             raise ValueError("number of rows in design matrix must be equal to number of samples in data")
-        self.data_matrix = handle_data(adata, layer)
+        self.data_matrix = get_input_arr()
         self.linear_coefficient_estimator = linear_coefficient_estimator
         self.n_embedding = n_embedding
         self.embedding = None
@@ -138,35 +143,37 @@ class LEMUR:
         `self`
             The fitted LEMUR model.
         """
-        Y = self.data_matrix
+        Y_dask = self.data_matrix
         design_matrix = self.design_matrix
         n_embedding = self.n_embedding
 
         if self.linear_coefficient_estimator == "linear":
             if verbose:
                 print("Centering the data using linear regression.")
-            lin_coef = ridge_regression(Y, design_matrix.to_numpy())
-            Y = Y - design_matrix.to_numpy() @ lin_coef
+            
+            design_matrix_dask = da.from_array(design_matrix.to_numpy(), chunks=(1000, 1000))
+            lin_coef_dask = ridge_regression(Y_dask, design_matrix_dask)
+            Y_dask = Y_dask - design_matrix_dask @ lin_coef_dask
         else:  # linear_coefficient_estimator == "zero"
-            lin_coef = np.zeros((design_matrix.shape[1], Y.shape[1]))
+            lin_coef_dask = da.zeros((design_matrix.shape[1], Y_dask.shape[1]))
 
         if verbose:
             print("Find base point")
-        base_point = fit_pca(Y, n_embedding, center=False).coord_system
+        base_point = fit_pca(Y_dask, n_embedding, center=False).coord_system
         if verbose:
             print("Fit regression on latent spaces")
-        coefficients = grassmann_lm(Y, design_matrix.to_numpy(), base_point)
+        coefficients = grassmann_lm(Y_dask, design_matrix_dask, base_point)
         if verbose:
             print("Find shared embedding coordinates")
-        embedding = project_data_on_diffemb(Y, design_matrix.to_numpy(), coefficients, base_point)
+        embedding = project_data_on_diffemb(Y_dask, design_matrix_dask, coefficients, base_point, use_dask=False)
 
         embedding, coefficients, base_point = _order_axis_by_variance(embedding, coefficients, base_point)
 
         self.embedding = embedding
-        self.alignment_coefficients = np.zeros((n_embedding, n_embedding + 1, design_matrix.shape[1]))
+        self.alignment_coefficients = da.zeros((n_embedding, n_embedding + 1, design_matrix.shape[1]))
         self.coefficients = coefficients
         self.base_point = base_point
-        self.linear_coefficients = lin_coef
+        self.linear_coefficients = lin_coef_dask.compute()
 
         return self
 
@@ -396,21 +403,25 @@ class LEMUR:
             new_design = handle_design_parameter(new_design, handle_obs_data(self.adata, obs_data))[0].to_numpy()
 
         # Make prediciton
-        approx = new_design @ self.linear_coefficients
+        approx = ensure_dask(new_design @ self.linear_coefficients)
 
         coef = self.coefficients
         al_coefs = self.alignment_coefficients
         des_row_groups, reduced_design_matrix, des_row_group_ids = row_groups(
-            new_design, return_reduced_matrix=True, return_group_ids=True
+            new_design, return_reduced_matrix=True, return_group_ids=True,
         )
+        des_row_groups = ensure_numpy(des_row_groups)
+        des_row_group_ids = ensure_numpy(des_row_group_ids)
         for id in des_row_group_ids:
             covars = reduced_design_matrix[id, :]
-            subspace = grassmann_map(np.dot(coef, covars).T, self.base_point.T)
+            subspace = grassmann_map(da.dot(coef, covars).T, self.base_point.T)
             alignment = _reverse_linear_transformation(al_coefs, covars)
-            offset = np.dot(al_coefs[:, 0, :], covars)
-            approx[des_row_groups == id, :] += (
+            offset = da.dot(al_coefs[:, 0, :], covars)
+            approx[des_row_groups == id, :] += ensure_dask((
                 (embedding[des_row_groups == id, :] - offset) @ alignment.T
-            ) @ subspace.T
+            ) @ subspace.T)
+        
+        approx = ensure_numpy(approx)
         if new_adata_layer is not None:
             self.adata.layers[new_adata_layer] = approx
             return self
@@ -488,7 +499,15 @@ def _handle_data_arg(data):
 
 
 def _order_axis_by_variance(embedding, coefficients, base_point):
-    U, d, Vt = np.linalg.svd(embedding, full_matrices=False)
+    full_matrices = False
+    U, d, Vt = np.linalg.svd(embedding, full_matrices=full_matrices)
+    """
+    if not full_matrices:
+        m, n = embedding.shape
+        U = U[:, :n]
+        Vt = Vt[:m, :]
+    """
+
     base_point = Vt @ base_point
     coefficients = np.einsum("pq,qij->pij", Vt, coefficients)
     embedding = U @ np.diag(d)
